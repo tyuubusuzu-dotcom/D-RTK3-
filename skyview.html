@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="ja" translate="no">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="google" content="notranslate">
+    <title>D-RTK 3 上空視界チェッカー（地形マスク版） [Ver.1]</title>
+    <!-- 地図用 -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- グラフ用 -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Meiryo, sans-serif; background-color: #f4f7f6; color: #333; padding: 15px; margin: 0; }
+        .container { max-width: 800px; margin: 0 auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
+        h1 { font-size: 1.2rem; text-align: center; color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px; margin-bottom: 15px; line-height: 1.4; }
+        
+        #map { height: 300px; width: 100%; border-radius: 4px; border: 1px solid #ccd1d1; margin-bottom: 15px; z-index: 1; }
+        
+        .btn { background: #3498db; color: white; border: none; padding: 14px 20px; font-size: 1.1rem; border-radius: 4px; cursor: pointer; width: 100%; font-weight: bold; transition: background 0.2s; }
+        .btn:hover { background: #2980b9; }
+        .btn:disabled { background: #95a5a6; cursor: not-allowed; }
+        
+        .status-box { margin-top: 15px; padding: 15px; background: #eef2f5; border-radius: 4px; text-align: center; font-weight: bold; color: #2c3e50; }
+        .progress-bar { width: 100%; background-color: #ddd; border-radius: 4px; margin-top: 10px; overflow: hidden; display: none; }
+        .progress-fill { height: 10px; background-color: #1abc9c; width: 0%; transition: width 0.2s; }
+        
+        #chart-container { position: relative; height: 350px; width: 100%; margin-top: 20px; display: none; }
+        .note { font-size: 0.8rem; color: #7f8c8d; margin-top: 10px; line-height: 1.4; text-align: center; }
+    </style>
+</head>
+<body class="notranslate">
+
+<div class="container">
+    <h1>D-RTK 3 上空視界シミュレーター<br><span style="color: #e74c3c;">[Ver.1] 地形遮蔽角チェッカー</span></h1>
+    
+    <p style="font-size: 0.9rem; margin-top: 0;">地図をタップしてD-RTK 3の設置場所を指定してください。</p>
+    <div id="map"></div>
+
+    <button id="analyze-btn" class="btn" onclick="startAnalysis()" disabled>解析を開始する (地点を選択してください)</button>
+
+    <div class="status-box" id="status-box">
+        <span id="status-text">待機中...</span>
+        <div class="progress-bar" id="progress-bar">
+            <div class="progress-fill" id="progress-fill"></div>
+        </div>
+    </div>
+
+    <div id="chart-container">
+        <canvas id="skyChart"></canvas>
+    </div>
+    
+    <div class="note">
+        ※ 国土地理院の標高APIを利用し、周囲2kmまでの地形の「見上げ角（仰角）」を計算しています。<br>
+        ※ グラフの青いエリアが「山や地形に隠されている角度」を示します。<br>
+        ※ 建物や樹木の高さは含まれません（純粋な地形データです）。
+    </div>
+</div>
+
+<script>
+    let map, marker;
+    let targetLat = null, targetLon = null, centerElevation = null;
+    let skyChart = null;
+
+    // 初期化
+    window.onload = function() {
+        // 初期位置を日本中心付近に設定
+        map = L.map('map').setView([34.6937, 135.5023], 13);
+        L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png', {
+            attribution: "<a href='https://maps.gsi.go.jp/development/ichiran.html' target='_blank'>国土地理院</a>"
+        }).addTo(map);
+
+        // 地図タップ時のイベント
+        map.on('click', function(e) {
+            targetLat = e.latlng.lat;
+            targetLon = e.latlng.lng;
+            
+            if (marker) {
+                marker.setLatLng(e.latlng);
+            } else {
+                marker = L.marker(e.latlng).addTo(map);
+            }
+            
+            const btn = document.getElementById('analyze-btn');
+            btn.disabled = false;
+            btn.innerText = "周囲の地形による遮蔽を解析する";
+            document.getElementById('chart-container').style.display = 'none';
+        });
+    };
+
+    // 距離と方位から緯度経度を計算する関数
+    function getDestination(lat, lon, brng, dist) {
+        const R = 6371e3; // 地球の半径 (m)
+        const lat1 = lat * Math.PI / 180;
+        const lon1 = lon * Math.PI / 180;
+        const brngRad = brng * Math.PI / 180;
+        const lat2 = Math.asin(Math.sin(lat1) * Math.cos(dist/R) + Math.cos(lat1) * Math.sin(dist/R) * Math.cos(brngRad));
+        const lon2 = lon1 + Math.atan2(Math.sin(brngRad) * Math.sin(dist/R) * Math.cos(lat1), Math.cos(dist/R) - Math.sin(lat1) * Math.sin(lat2));
+        return { lat: lat2 * 180 / Math.PI, lon: lon2 * 180 / Math.PI };
+    }
+
+    // 標高APIを叩く関数
+    async function fetchElevation(lat, lon) {
+        const url = `https://cyberjapandata2.gsi.go.jp/general/dem/scripts/getelevation.php?lon=${lon}&lat=${lat}&outtype=JSON`;
+        try {
+            const response = await fetch(url);
+            const data = await response.json();
+            return (data.elevation === '-----' || isNaN(data.elevation)) ? null : parseFloat(data.elevation);
+        } catch (e) {
+            return null;
+        }
+    }
+
+    // メインの解析処理
+    async function startAnalysis() {
+        if (!targetLat || !targetLon) return;
+
+        const btn = document.getElementById('analyze-btn');
+        const statusText = document.getElementById('status-text');
+        const progressBar = document.getElementById('progress-bar');
+        const progressFill = document.getElementById('progress-fill');
+        
+        btn.disabled = true;
+        progressBar.style.display = 'block';
+        document.getElementById('chart-container').style.display = 'none';
+        
+        // パラメータ設定
+        const angles = [0, 22.5, 45, 67.5, 90, 112.5, 135, 157.5, 180, 202.5, 225, 247.5, 270, 292.5, 315, 337.5];
+        const labels = ['北', '北北東', '北東', '東北東', '東', '東南東', '南東', '南南東', '南', '南南西', '南西', '西南西', '西', '西北西', '北西', '北北西'];
+        const distances = [100, 300, 500, 1000, 1500, 2000]; // チェックする距離(m)
+        const dRtkHeightOffset = 1.8; // D-RTK 3のポール高さ
+        
+        let maxMaskAngles = new Array(16).fill(0); // 16方位の最大仰角
+        let totalRequests = angles.length * distances.length + 1; // +1は中心点
+        let completedRequests = 0;
+
+        statusText.innerText = "中心点の標高を取得中...";
+        progressFill.style.width = "0%";
+
+        // 1. 中心点の標高を取得
+        centerElevation = await fetchElevation(targetLat, targetLon);
+        completedRequests++;
+        
+        if (centerElevation === null) {
+            alert("設置場所の標高が取得できませんでした（海などの可能性があります）。");
+            btn.disabled = false;
+            progressBar.style.display = 'none';
+            statusText.innerText = "エラー発生";
+            return;
+        }
+
+        const baseHeight = centerElevation + dRtkHeightOffset;
+
+        // 2. 周囲の地形をスキャン (API負荷を考慮して少しずつリクエスト)
+        for (let i = 0; i < angles.length; i++) {
+            for (let j = 0; j < distances.length; j++) {
+                const dist = distances[j];
+                const pt = getDestination(targetLat, targetLon, angles[i], dist);
+                
+                const ele = await fetchElevation(pt.lat, pt.lon);
+                completedRequests++;
+                
+                // 進捗表示の更新
+                statusText.innerText = `地形データをスキャン中... (${completedRequests}/${totalRequests})`;
+                progressFill.style.width = `${(completedRequests / totalRequests) * 100}%`;
+
+                if (ele !== null) {
+                    const heightDiff = ele - baseHeight;
+                    if (heightDiff > 0) {
+                        // 仰角(角度)を計算 : arctan(高さ / 距離)
+                        const angleRad = Math.atan2(heightDiff, dist);
+                        const angleDeg = angleRad * 180 / Math.PI;
+                        if (angleDeg > maxMaskAngles[i]) {
+                            maxMaskAngles[i] = angleDeg;
+                        }
+                    }
+                }
+                // 地理院APIへの負荷軽減のための微小なウェイト
+                await new Promise(resolve => setTimeout(resolve, 30));
+            }
+        }
+
+        statusText.innerText = "解析完了！";
+        btn.disabled = false;
+        btn.innerText = "別の場所で再解析する";
+        progressBar.style.display = 'none';
+
+        drawChart(labels, maxMaskAngles);
+    }
+
+    // グラフの描画処理
+    function drawChart(labels, data) {
+        document.getElementById('chart-container').style.display = 'block';
+        const ctx = document.getElementById('skyChart').getContext('2d');
+
+        if (skyChart) {
+            skyChart.destroy();
+        }
+
+        skyChart = new Chart(ctx, {
+            type: 'radar',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: '地形による遮蔽角 (度)',
+                    data: data,
+                    backgroundColor: 'rgba(52, 152, 219, 0.4)',
+                    borderColor: 'rgba(41, 128, 185, 1)',
+                    borderWidth: 2,
+                    pointBackgroundColor: 'rgba(231, 76, 60, 1)',
+                    pointBorderColor: '#fff',
+                    pointHoverBackgroundColor: '#fff',
+                    pointHoverBorderColor: 'rgba(231, 76, 60, 1)'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    r: {
+                        angleLines: { color: 'rgba(0, 0, 0, 0.1)' },
+                        grid: { color: 'rgba(0, 0, 0, 0.1)' },
+                        suggestedMin: 0,
+                        suggestedMax: 45, // 仰角45度までを標準メモリとする
+                        ticks: {
+                            stepSize: 15,
+                            callback: function(value) { return value + '°'; }
+                        }
+                    }
+                },
+                plugins: {
+                    legend: { position: 'bottom' }
+                }
+            }
+        });
+    }
+</script>
+
+</body>
+</html>
