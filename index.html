@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="google" content="notranslate">
-    <title>D-RTK 3 上空視界チェッカー（Google衛星写真版） [Ver.11]</title>
+    <title>D-RTK 3 上空視界チェッカー（KML出力対応版） [Ver.12]</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -49,13 +49,12 @@
         
         #chart-container { position: relative; height: 400px; width: 100%; margin-top: 20px; display: none; }
         .note { font-size: 0.85rem; color: #34495e; margin-top: 20px; line-height: 1.5; text-align: left; background: #fdfefe; padding: 15px; border: 1px solid #d5d8dc; border-radius: 4px; }
-        .note strong { color: #e74c3c; }
     </style>
 </head>
 <body class="notranslate">
 
 <div class="container">
-    <h1>D-RTK 3 上空視界シミュレーター<br><span style="color: #e74c3c;">[Ver.11] Google衛星写真対応版</span></h1>
+    <h1>D-RTK 3 上空視界シミュレーター<br><span style="color: #e74c3c;">[Ver.12] KMLファイル出力対応版</span></h1>
     
     <div class="header-control">
         <p>十字カーソルでタップし候補地を配置 (最大10個)</p>
@@ -79,17 +78,18 @@
         </div>
     </div>
 
+    <!-- KML出力ボタンを追加 -->
+    <button id="kml-btn" class="btn" style="background:#8e44ad; margin-top:10px; display:none;" onclick="exportKML()">🌐 解析結果をGoogle Earth用(KML)に保存</button>
+
     <div id="chart-container">
         <canvas id="skyChart"></canvas>
     </div>
     
     <div class="note">
-        <strong>【マップレイヤーの切り替え】</strong><br>
-        地図右上のアイコンから「国土地理院（等高線）」と「Google衛星写真」をいつでも切り替え可能です。<br><br>
-        <strong>【マップ上のラインについて】</strong><br>
-        🔴 <strong>赤線：</strong> 仰角15度以上（通信が遮断されやすい危険な方向）<br>
-        🟠 <strong>オレンジ線：</strong> 仰角5度〜15度（やや障害物がある方向）<br>
-        🟢 <span style="color:#2ecc71; font-weight:bold;">緑の短い線：</span> 仰角5度未満（視界が開けており、安全な方向）
+        <strong>【Google Earthでの立体表示手順】</strong><br>
+        1. 解析完了後、「Google Earth用データ(KML)を保存」ボタンを押してファイルをダウンロードします。<br>
+        2. Google Earth (Web版でもPro版でも可) を開きます。<br>
+        3. ダウンロードしたKMLファイルを画面にドラッグ＆ドロップすると、立体地図上に赤・オレンジ・緑のラインが反映されます。
     </div>
 </div>
 
@@ -106,9 +106,7 @@
     }
 
     window.onload = function() {
-        // Google衛星写真（地名・道路オーバーレイのハイブリッド版）
         const googleSat = L.tileLayer('https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', { attribution: "Google", maxZoom: 20 });
-        // 国土地理院地図（等高線用）
         const gsiStd = L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png', { attribution: "国土地理院", maxZoom: 18 });
 
         const defaultLat = 34.6533;
@@ -129,14 +127,8 @@
             }
         }
 
-        // デフォルトをGoogle衛星写真に設定
         map = L.map('map', { layers: [googleSat] }).setView([initLat, initLon], initZoom);
-        
-        // レイヤー切り替えコントロール
-        L.control.layers({ 
-            "Google衛星写真": googleSat,
-            "国土地理院地図": gsiStd
-        }).addTo(map);
+        L.control.layers({ "Google衛星写真": googleSat, "国土地理院地図": gsiStd }).addTo(map);
 
         map.on('moveend', function() {
             const center = map.getCenter();
@@ -171,13 +163,15 @@
                 marker: marker,
                 drawnItems: L.layerGroup().addTo(map), 
                 color: colorHex,
-                bgColor: hexToRgba(colorHex, 0.2)
+                bgColor: hexToRgba(colorHex, 0.2),
+                analysisLines: [] // KML出力用のラインデータ保存用
             };
             
             candidatePoints.push(pointData);
             updateMarkerList();
             document.getElementById('analyze-btn').disabled = false;
             document.getElementById('clear-btn').disabled = false;
+            document.getElementById('kml-btn').style.display = 'none'; // KMLボタンを隠す
 
             pointData.elevation = await fetchElevation(e.latlng.lat, e.latlng.lng);
             updateMarkerList();
@@ -218,6 +212,7 @@
         updateMarkerList();
         document.getElementById('analyze-btn').disabled = true;
         document.getElementById('clear-btn').disabled = true;
+        document.getElementById('kml-btn').style.display = 'none';
         document.getElementById('chart-container').style.display = 'none';
         document.getElementById('status-text').innerText = "クリアしました。";
         document.getElementById('progress-bar').style.display = 'none';
@@ -251,6 +246,7 @@
         btn.disabled = true; clearBtn.disabled = true;
         document.getElementById('progress-bar').style.display = 'block';
         document.getElementById('chart-container').style.display = 'none';
+        document.getElementById('kml-btn').style.display = 'none';
         
         const angles = [0, 22.5, 45, 67.5, 90, 112.5, 135, 157.5, 180, 202.5, 225, 247.5, 270, 292.5, 315, 337.5];
         const labels = ['北', '北北東', '北東', '東北東', '東', '東南東', '南東', '南南東', '南', '南南西', '南西', '西南西', '西', '西北西', '北西', '北北西'];
@@ -261,6 +257,7 @@
 
         for (let p of candidatePoints) {
             p.drawnItems.clearLayers();
+            p.analysisLines = []; // データクリア
             let maxMaskAngles = new Array(16).fill(0);
             let worstObstacleLatLngs = new Array(16).fill(null);
             
@@ -288,6 +285,7 @@
                     await new Promise(r => setTimeout(r, 15));
                 }
                 
+                // 遮蔽角に基づくライン描画とKML用データ保存
                 if (maxMaskAngles[i] >= 5 && worstObstacleLatLngs[i]) {
                     const isSevere = maxMaskAngles[i] >= 15;
                     L.polyline([[p.lat, p.lon], worstObstacleLatLngs[i]], {
@@ -300,6 +298,12 @@
                     L.circleMarker(worstObstacleLatLngs[i], {
                         radius: 4, color: isSevere ? '#e74c3c' : '#f39c12', fillOpacity: 1
                     }).addTo(p.drawnItems);
+
+                    // KML用に保存
+                    p.analysisLines.push({
+                        type: isSevere ? 'severe' : 'warning',
+                        coords: [[p.lat, p.lon], worstObstacleLatLngs[i]]
+                    });
                 } else {
                     const clearPt = getDestination(p.lat, p.lon, angles[i], 100);
                     L.polyline([[p.lat, p.lon], [clearPt.lat, clearPt.lon]], {
@@ -307,6 +311,12 @@
                         weight: 3,
                         opacity: 0.7
                     }).addTo(p.drawnItems);
+
+                    // KML用に保存
+                    p.analysisLines.push({
+                        type: 'clear',
+                        coords: [[p.lat, p.lon], [clearPt.lat, clearPt.lon]]
+                    });
                 }
             }
             
@@ -318,10 +328,48 @@
             });
         }
 
-        statusText.innerText = "解析完了！マップ上の障害物ポイントと緑の安全ラインをご確認ください。";
+        statusText.innerText = "解析完了！紫色のボタンからGoogle Earth用データをダウンロードできます。";
         btn.disabled = false; clearBtn.disabled = false;
         document.getElementById('progress-bar').style.display = 'none';
+        document.getElementById('kml-btn').style.display = 'block'; // KML出力ボタンを表示
         drawChart(labels, chartDatasets);
+    }
+
+    // KML出力関数
+    function exportKML() {
+        // KMLのカラースタイル (AABBGGRR)
+        let kml = `<?xml version="1.0" encoding="UTF-8"?>
+        <kml xmlns="http://www.opengis.net/kml/2.2">
+        <Document>
+            <name>D-RTK 3 視界解析結果</name>
+            <Style id="redLine"><LineStyle><color>ff0000ff</color><width>4</width></LineStyle></Style>
+            <Style id="orangeLine"><LineStyle><color>ff00aaff</color><width>3</width></LineStyle></Style>
+            <Style id="greenLine"><LineStyle><color>ff00ff00</color><width>2</width></LineStyle></Style>
+        `;
+        
+        candidatePoints.forEach(p => {
+            if(p.analysisLines.length === 0) return;
+            // 候補地のピン
+            kml += `<Placemark><name>地点 ${p.id}</name><Point><coordinates>${p.lon},${p.lat},0</coordinates></Point></Placemark>\n`;
+            // 解析ライン
+            p.analysisLines.forEach(line => {
+                let styleUrl = line.type === 'clear' ? '#greenLine' : (line.type === 'severe' ? '#redLine' : '#orangeLine');
+                let coordsStr = line.coords.map(c => `${c[1]},${c[0]},0`).join(' '); // 経度,緯度,高度
+                kml += `<Placemark><styleUrl>${styleUrl}</styleUrl><LineString><tessellate>1</tessellate><coordinates>${coordsStr}</coordinates></LineString></Placemark>\n`;
+            });
+        });
+        
+        kml += `</Document></kml>`;
+
+        const blob = new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'drtk3_analysis.kml';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
     }
 
     function drawChart(labels, datasets) {
