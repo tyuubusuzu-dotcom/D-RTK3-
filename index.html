@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="google" content="notranslate">
-    <title>D-RTK 3 上空視界チェッカー（地形マスク版） [Ver.1]</title>
+    <title>D-RTK 3 上空視界チェッカー（地形マスク版） [Ver.2]</title>
     <!-- 地図用 -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -15,8 +15,12 @@
         .container { max-width: 800px; margin: 0 auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
         h1 { font-size: 1.2rem; text-align: center; color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px; margin-bottom: 15px; line-height: 1.4; }
         
-        #map { height: 300px; width: 100%; border-radius: 4px; border: 1px solid #ccd1d1; margin-bottom: 15px; z-index: 1; }
+        /* マップのカーソルを十字型に変更 */
+        #map { height: 350px; width: 100%; border-radius: 4px; border: 1px solid #ccd1d1; margin-bottom: 15px; z-index: 1; cursor: crosshair; }
         
+        .elevation-info { background: #e8f6f3; border-left: 4px solid #1abc9c; padding: 12px; margin-bottom: 15px; font-weight: bold; color: #2c3e50; display: none; border-radius: 4px; }
+        .elevation-value { color: #d35400; font-size: 1.2rem; margin-left: 10px; }
+
         .btn { background: #3498db; color: white; border: none; padding: 14px 20px; font-size: 1.1rem; border-radius: 4px; cursor: pointer; width: 100%; font-weight: bold; transition: background 0.2s; }
         .btn:hover { background: #2980b9; }
         .btn:disabled { background: #95a5a6; cursor: not-allowed; }
@@ -32,10 +36,15 @@
 <body class="notranslate">
 
 <div class="container">
-    <h1>D-RTK 3 上空視界シミュレーター<br><span style="color: #e74c3c;">[Ver.1] 地形遮蔽角チェッカー</span></h1>
+    <h1>D-RTK 3 上空視界シミュレーター<br><span style="color: #e74c3c;">[Ver.2] 衛星画像・標高表示対応版</span></h1>
     
-    <p style="font-size: 0.9rem; margin-top: 0;">地図をタップしてD-RTK 3の設置場所を指定してください。</p>
+    <p style="font-size: 0.9rem; margin-top: 0; color: #34495e; font-weight: bold;">十字カーソルで地図をタップして設置場所を指定してください。（右上のアイコンで衛星写真に切り替え可能）</p>
+    
     <div id="map"></div>
+
+    <div id="elevation-info" class="elevation-info">
+        選択地点の標高 (DEM5A/10B): <span id="selected-elevation" class="elevation-value">-</span>
+    </div>
 
     <button id="analyze-btn" class="btn" onclick="startAnalysis()" disabled>解析を開始する (地点を選択してください)</button>
 
@@ -53,7 +62,7 @@
     <div class="note">
         ※ 国土地理院の標高APIを利用し、周囲2kmまでの地形の「見上げ角（仰角）」を計算しています。<br>
         ※ グラフの青いエリアが「山や地形に隠されている角度」を示します。<br>
-        ※ 建物や樹木の高さは含まれません（純粋な地形データです）。
+        ※ 建物や樹木などの高さは含まれない、純粋な地形データによるシミュレーションです。
     </div>
 </div>
 
@@ -64,14 +73,31 @@
 
     // 初期化
     window.onload = function() {
-        // 初期位置を日本中心付近に設定
-        map = L.map('map').setView([34.6937, 135.5023], 13);
-        L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png', {
-            attribution: "<a href='https://maps.gsi.go.jp/development/ichiran.html' target='_blank'>国土地理院</a>"
-        }).addTo(map);
+        // 標準地図と衛星写真のレイヤーを定義
+        const stdMap = L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png', {
+            attribution: "<a href='https://maps.gsi.go.jp/development/ichiran.html' target='_blank'>国土地理院</a>",
+            maxZoom: 18
+        });
+        
+        const satelliteMap = L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg', {
+            attribution: "<a href='https://maps.gsi.go.jp/development/ichiran.html' target='_blank'>国土地理院</a>",
+            maxZoom: 18
+        });
+
+        // 初期位置の設定（とりあえず日本中心付近）
+        map = L.map('map', {
+            layers: [stdMap]
+        }).setView([34.6937, 135.5023], 13);
+
+        // レイヤー切り替えコントロールを右上に配置
+        const baseMaps = {
+            "標準地図": stdMap,
+            "衛星写真": satelliteMap
+        };
+        L.control.layers(baseMaps).addTo(map);
 
         // 地図タップ時のイベント
-        map.on('click', function(e) {
+        map.on('click', async function(e) {
             targetLat = e.latlng.lat;
             targetLon = e.latlng.lng;
             
@@ -82,15 +108,35 @@
             }
             
             const btn = document.getElementById('analyze-btn');
-            btn.disabled = false;
-            btn.innerText = "周囲の地形による遮蔽を解析する";
+            const eleInfo = document.getElementById('elevation-info');
+            const eleValue = document.getElementById('selected-elevation');
+            
+            // UIの初期化
+            btn.disabled = true;
+            btn.innerText = "地点の標高を取得中...";
+            eleInfo.style.display = 'block';
+            eleValue.innerText = "取得中...";
             document.getElementById('chart-container').style.display = 'none';
+            document.getElementById('status-text').innerText = "待機中...";
+            document.getElementById('progress-bar').style.display = 'none';
+            
+            // タップした瞬間にその地点の標高を取得
+            centerElevation = await fetchElevation(targetLat, targetLon);
+            
+            if (centerElevation !== null) {
+                eleValue.innerText = centerElevation.toFixed(2) + " m";
+                btn.disabled = false;
+                btn.innerText = "周囲の地形による遮蔽を解析する";
+            } else {
+                eleValue.innerText = "データなし (海など)";
+                btn.innerText = "解析不可 (標高データなし)";
+            }
         });
     };
 
     // 距離と方位から緯度経度を計算する関数
     function getDestination(lat, lon, brng, dist) {
-        const R = 6371e3; // 地球の半径 (m)
+        const R = 6371e3;
         const lat1 = lat * Math.PI / 180;
         const lon1 = lon * Math.PI / 180;
         const brngRad = brng * Math.PI / 180;
@@ -113,7 +159,7 @@
 
     // メインの解析処理
     async function startAnalysis() {
-        if (!targetLat || !targetLon) return;
+        if (!targetLat || !targetLon || centerElevation === null) return;
 
         const btn = document.getElementById('analyze-btn');
         const statusText = document.getElementById('status-text');
@@ -124,34 +170,19 @@
         progressBar.style.display = 'block';
         document.getElementById('chart-container').style.display = 'none';
         
-        // パラメータ設定
+        // 解析パラメータ
         const angles = [0, 22.5, 45, 67.5, 90, 112.5, 135, 157.5, 180, 202.5, 225, 247.5, 270, 292.5, 315, 337.5];
         const labels = ['北', '北北東', '北東', '東北東', '東', '東南東', '南東', '南南東', '南', '南南西', '南西', '西南西', '西', '西北西', '北西', '北北西'];
         const distances = [100, 300, 500, 1000, 1500, 2000]; // チェックする距離(m)
         const dRtkHeightOffset = 1.8; // D-RTK 3のポール高さ
         
-        let maxMaskAngles = new Array(16).fill(0); // 16方位の最大仰角
-        let totalRequests = angles.length * distances.length + 1; // +1は中心点
+        let maxMaskAngles = new Array(16).fill(0);
+        let totalRequests = angles.length * distances.length;
         let completedRequests = 0;
-
-        statusText.innerText = "中心点の標高を取得中...";
-        progressFill.style.width = "0%";
-
-        // 1. 中心点の標高を取得
-        centerElevation = await fetchElevation(targetLat, targetLon);
-        completedRequests++;
-        
-        if (centerElevation === null) {
-            alert("設置場所の標高が取得できませんでした（海などの可能性があります）。");
-            btn.disabled = false;
-            progressBar.style.display = 'none';
-            statusText.innerText = "エラー発生";
-            return;
-        }
 
         const baseHeight = centerElevation + dRtkHeightOffset;
 
-        // 2. 周囲の地形をスキャン (API負荷を考慮して少しずつリクエスト)
+        // 周囲の地形をスキャン
         for (let i = 0; i < angles.length; i++) {
             for (let j = 0; j < distances.length; j++) {
                 const dist = distances[j];
@@ -160,14 +191,12 @@
                 const ele = await fetchElevation(pt.lat, pt.lon);
                 completedRequests++;
                 
-                // 進捗表示の更新
                 statusText.innerText = `地形データをスキャン中... (${completedRequests}/${totalRequests})`;
                 progressFill.style.width = `${(completedRequests / totalRequests) * 100}%`;
 
                 if (ele !== null) {
                     const heightDiff = ele - baseHeight;
                     if (heightDiff > 0) {
-                        // 仰角(角度)を計算 : arctan(高さ / 距離)
                         const angleRad = Math.atan2(heightDiff, dist);
                         const angleDeg = angleRad * 180 / Math.PI;
                         if (angleDeg > maxMaskAngles[i]) {
@@ -175,7 +204,7 @@
                         }
                     }
                 }
-                // 地理院APIへの負荷軽減のための微小なウェイト
+                // サーバー負荷軽減のためのウェイト
                 await new Promise(resolve => setTimeout(resolve, 30));
             }
         }
