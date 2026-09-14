@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="google" content="notranslate">
-    <title>D-RTK 3 上空視界チェッカー（複数候補・座標表示版） [Ver.4]</title>
+    <title>D-RTK 3 上空視界チェッカー（障害物想定・SV対応版） [Ver.5]</title>
     <!-- 地図用 -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -15,10 +15,13 @@
         .container { max-width: 800px; margin: 0 auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
         h1 { font-size: 1.2rem; text-align: center; color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px; margin-bottom: 15px; line-height: 1.4; }
         
-        .header-control { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .header-control { display: flex; flex-direction: column; gap: 10px; margin-bottom: 15px; }
         .header-control p { font-size: 0.9rem; margin: 0; color: #34495e; font-weight: bold; }
+        .control-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+        .obstacle-setting { display: flex; align-items: center; gap: 8px; background: #fff3cd; padding: 8px 12px; border-radius: 4px; border: 1px solid #ffeeba; }
+        .obstacle-setting label { font-size: 0.9rem; font-weight: bold; color: #856404; }
         
-        #clear-btn { background: #e74c3c; color: white; border: none; padding: 6px 12px; font-size: 0.9rem; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        #clear-btn { background: #e74c3c; color: white; border: none; padding: 8px 15px; font-size: 0.9rem; border-radius: 4px; cursor: pointer; font-weight: bold; }
         #clear-btn:hover { background: #c0392b; }
         #clear-btn:disabled { background: #e0a09a; cursor: not-allowed; }
 
@@ -26,15 +29,19 @@
         #map { height: 350px; width: 100%; border-radius: 4px; border: 1px solid #ccd1d1; margin-bottom: 15px; z-index: 1; cursor: crosshair; }
         
         .elevation-info { background: #e8f6f3; border-left: 4px solid #1abc9c; padding: 12px; margin-bottom: 15px; border-radius: 4px; display: none; }
-        .marker-item { margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px dashed #bdc3c7; }
+        .marker-item { margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px dashed #bdc3c7; }
         .marker-item:last-child { margin-bottom: 0; padding-bottom: 0; border-bottom: none; }
-        .marker-header { display: flex; align-items: center; font-size: 0.95rem; font-weight: bold; color: #2c3e50; margin-bottom: 5px; }
+        .marker-header { display: flex; align-items: center; font-size: 0.95rem; font-weight: bold; color: #2c3e50; margin-bottom: 8px; }
         .marker-badge { display: inline-block; width: 22px; height: 22px; color: white; text-align: center; border-radius: 50%; font-size: 12px; line-height: 22px; margin-right: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.3); }
         .elevation-value { color: #d35400; font-size: 1.1rem; margin-left: 5px; }
         
-        /* コピー用座標のデザイン */
-        .coord-box { margin-left: 32px; font-size: 0.9rem; color: #34495e; display: flex; align-items: center; }
-        .coord-text { background: #fff; padding: 3px 8px; border: 1px solid #ccd1d1; border-radius: 4px; margin-left: 5px; font-family: monospace; font-size: 0.95rem; user-select: all; cursor: copy; }
+        /* 座標とSVボタンのデザイン */
+        .coord-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-left: 32px; }
+        .coord-box { font-size: 0.9rem; color: #34495e; display: flex; align-items: center; }
+        .coord-text { background: #fff; padding: 4px 8px; border: 1px solid #ccd1d1; border-radius: 4px; margin-left: 5px; font-family: monospace; font-size: 0.95rem; user-select: all; cursor: copy; }
+        
+        .sv-btn { display: inline-block; background: #f39c12; color: white; text-decoration: none; padding: 5px 12px; border-radius: 4px; font-size: 0.85rem; font-weight: bold; box-shadow: 0 1px 3px rgba(0,0,0,0.2); transition: background 0.2s; }
+        .sv-btn:hover { background: #d68910; }
 
         .btn { background: #3498db; color: white; border: none; padding: 14px 20px; font-size: 1.1rem; border-radius: 4px; cursor: pointer; width: 100%; font-weight: bold; transition: background 0.2s; }
         .btn:hover { background: #2980b9; }
@@ -51,11 +58,17 @@
 <body class="notranslate">
 
 <div class="container">
-    <h1>D-RTK 3 上空視界シミュレーター<br><span style="color: #e74c3c;">[Ver.4] 複数候補地・座標コピー対応版</span></h1>
+    <h1>D-RTK 3 上空視界シミュレーター<br><span style="color: #e74c3c;">[Ver.5] 障害物想定・ストリートビュー対応</span></h1>
     
     <div class="header-control">
         <p>十字カーソルでタップし候補地を配置 (最大10個)</p>
-        <button id="clear-btn" onclick="clearMarkers()" disabled>全クリア</button>
+        <div class="control-row">
+            <div class="obstacle-setting">
+                <label for="obstacle-height">🌲 周囲の障害物(木・建物)の想定高さ:</label>
+                <input type="number" id="obstacle-height" value="0" step="1" min="0" style="width: 70px; padding: 4px; border: 1px solid #ccc; border-radius: 3px; font-size:1rem; text-align:center;"> m
+            </div>
+            <button id="clear-btn" onclick="clearMarkers()" disabled>全クリア</button>
+        </div>
     </div>
     
     <div id="map"></div>
@@ -78,9 +91,9 @@
     </div>
     
     <div class="note">
-        ※ 国土地理院の標高APIを利用し、周囲2kmまでの地形による遮蔽角を計算します。<br>
-        ※ チャートの面積が広いほど、地形に隠れて通信(FIX)しにくい場所を示します。<br>
-        ※ リストの座標（白枠）は、タップすると簡単にコピーしてGoogleMapに貼り付けられます。
+        ※ 障害物想定高さを入力すると、周囲2kmの地形すべてにその高さを上乗せして遮蔽角をシミュレーションします。<br>
+        ※ チャートの面積が広いほど、地形や障害物に隠れて通信(FIX)しにくい場所を示します。<br>
+        ※ 座標の横のボタンからGoogleストリートビューを開き、実際の現況（電柱・建物など）を確認できます。
     </div>
 </div>
 
@@ -106,7 +119,8 @@
             maxZoom: 18
         });
 
-        map = L.map('map', { layers: [stdMap] }).setView([34.6937, 135.5023], 13);
+        // 初期位置を調整
+        map = L.map('map', { layers: [stdMap] }).setView([34.4820, 135.7118], 13);
 
         const baseMaps = {
             "標準地図": stdMap,
@@ -165,16 +179,21 @@
         let html = '';
         candidatePoints.forEach(p => {
             let eleStr = (p.elevation === null) ? 'データなし' : (typeof p.elevation === 'number' ? p.elevation.toFixed(2) + ' m' : p.elevation);
-            // 緯度経度を小数点以下6桁でフォーマット
             let coordStr = `${p.lat.toFixed(6)}, ${p.lon.toFixed(6)}`;
+            
+            // ストリートビューを開くためのGoogle Maps ユニバーサルURL
+            let svUrl = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${p.lat},${p.lon}`;
             
             html += `<div class="marker-item">
                         <div class="marker-header">
                             <span class="marker-badge" style="background-color:${p.color};">${p.id}</span>
                             地点標高: <span class="elevation-value">${eleStr}</span>
                         </div>
-                        <div class="coord-box">
-                            📍 座標 (緯度, 経度): <span class="coord-text" title="タップで全選択">${coordStr}</span>
+                        <div class="coord-row">
+                            <div class="coord-box">
+                                📍 <span class="coord-text" title="タップで全選択">${coordStr}</span>
+                            </div>
+                            <a href="${svUrl}" target="_blank" class="sv-btn">🚶‍♂️ 現況をストリートビューで確認</a>
                         </div>
                      </div>`;
         });
@@ -223,6 +242,10 @@
         const progressFill = document.getElementById('progress-fill');
         const clearBtn = document.getElementById('clear-btn');
         
+        // 追加：ユーザーが入力した仮想の障害物高さ（デフォルト0m）を取得
+        const obstacleHeightInput = parseFloat(document.getElementById('obstacle-height').value);
+        const obstacleHeight = isNaN(obstacleHeightInput) ? 0 : Math.max(0, obstacleHeightInput);
+        
         btn.disabled = true;
         clearBtn.disabled = true;
         progressBar.style.display = 'block';
@@ -260,7 +283,10 @@
                     progressFill.style.width = `${(completedRequests / totalRequests) * 100}%`;
 
                     if (ele !== null) {
-                        const heightDiff = ele - baseHeight;
+                        // 地形データに仮想の障害物高さ（木や建物）を上乗せして計算
+                        const effectiveEle = ele + obstacleHeight;
+                        const heightDiff = effectiveEle - baseHeight;
+                        
                         if (heightDiff > 0) {
                             const angleRad = Math.atan2(heightDiff, dist);
                             const angleDeg = angleRad * 180 / Math.PI;
