@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="google" content="notranslate">
-    <title>D-RTK 3 上空視界チェッカー（障害物想定・SV対応版） [Ver.5]</title>
+    <title>D-RTK 3 上空視界チェッカー（SV最適化版） [Ver.6]</title>
     <!-- 地図用 -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -58,7 +58,7 @@
 <body class="notranslate">
 
 <div class="container">
-    <h1>D-RTK 3 上空視界シミュレーター<br><span style="color: #e74c3c;">[Ver.5] 障害物想定・ストリートビュー対応</span></h1>
+    <h1>D-RTK 3 上空視界シミュレーター<br><span style="color: #e74c3c;">[Ver.6] SV最適化版</span></h1>
     
     <div class="header-control">
         <p>十字カーソルでタップし候補地を配置 (最大10個)</p>
@@ -91,9 +91,8 @@
     </div>
     
     <div class="note">
-        ※ 障害物想定高さを入力すると、周囲2kmの地形すべてにその高さを上乗せして遮蔽角をシミュレーションします。<br>
-        ※ チャートの面積が広いほど、地形や障害物に隠れて通信(FIX)しにくい場所を示します。<br>
-        ※ 座標の横のボタンからGoogleストリートビューを開き、実際の現況（電柱・建物など）を確認できます。
+        ※ 山間部などストリートビューデータが存在しない地点の場合、Googleマップが開くだけになることがあります。<br>
+        ※ チャートの面積が広いほど、地形や障害物に隠れて通信(FIX)しにくい場所を示します。
     </div>
 </div>
 
@@ -119,7 +118,6 @@
             maxZoom: 18
         });
 
-        // 初期位置を調整
         map = L.map('map', { layers: [stdMap] }).setView([34.4820, 135.7118], 13);
 
         const baseMaps = {
@@ -181,8 +179,9 @@
             let eleStr = (p.elevation === null) ? 'データなし' : (typeof p.elevation === 'number' ? p.elevation.toFixed(2) + ' m' : p.elevation);
             let coordStr = `${p.lat.toFixed(6)}, ${p.lon.toFixed(6)}`;
             
-            // ストリートビューを開くためのGoogle Maps ユニバーサルURL
-            let svUrl = `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${p.lat},${p.lon}`;
+            // 【変更点】ストリートビューのURL形式を変更
+            // 以前の形式はスマホで黒いカバーが出やすいため、より直接的なcbllパラメータを使用します
+            let svUrl = `https://www.google.com/maps?q=${p.lat},${p.lon}&layer=c&cbll=${p.lat},${p.lon}`;
             
             html += `<div class="marker-item">
                         <div class="marker-header">
@@ -242,7 +241,6 @@
         const progressFill = document.getElementById('progress-fill');
         const clearBtn = document.getElementById('clear-btn');
         
-        // 追加：ユーザーが入力した仮想の障害物高さ（デフォルト0m）を取得
         const obstacleHeightInput = parseFloat(document.getElementById('obstacle-height').value);
         const obstacleHeight = isNaN(obstacleHeightInput) ? 0 : Math.max(0, obstacleHeightInput);
         
@@ -283,7 +281,6 @@
                     progressFill.style.width = `${(completedRequests / totalRequests) * 100}%`;
 
                     if (ele !== null) {
-                        // 地形データに仮想の障害物高さ（木や建物）を上乗せして計算
                         const effectiveEle = ele + obstacleHeight;
                         const heightDiff = effectiveEle - baseHeight;
                         
