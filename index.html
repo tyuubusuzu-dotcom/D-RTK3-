@@ -1,21 +1,10 @@
-鋭いですね。おっしゃる通り、等高線が示す実際の山の形と赤い図形が全くリンクしておらず、違和感のある表示になっています。
-
-ズレて見える2つの原因
-
-距離ではなく「角度」を描画している: 先ほどの赤い図形は、下のレーダーチャート（角度）をそのまま地図に貼り付けただけのものでした。「障害物が100m先にあっても、2km先にあっても、見上げ角が同じ30度なら同じ大きさで描画する」という仕様だったため、実際の地形（等高線の位置）を無視して広がっていました。
-
-解像度の粗さ: 16方位（22.5度刻み）でしか直線を結んでいないため、山の複雑な稜線を表現できず、カクカクした不自然な形になっていました。
-
-抽象的な図形を重ねるのではなく、「各方位で最も空を遮っている障害物の物理的な位置」を地図上に直接プロットする仕様に変更した【Ver.8】を作成しました。これで等高線と完全に一致するはずです。
-
-HTML
 <!DOCTYPE html>
 <html lang="ja" translate="no">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="google" content="notranslate">
-    <title>D-RTK 3 上空視界チェッカー（遮蔽ポイント特定版） [Ver.8]</title>
+    <title>D-RTK 3 上空視界チェッカー（表示位置記憶対応版） [Ver.10]</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -66,7 +55,7 @@ HTML
 <body class="notranslate">
 
 <div class="container">
-    <h1>D-RTK 3 上空視界シミュレーター<br><span style="color: #e74c3c;">[Ver.8] 遮蔽ポイント特定版</span></h1>
+    <h1>D-RTK 3 上空視界シミュレーター<br><span style="color: #e74c3c;">[Ver.10] 表示位置記憶対応版</span></h1>
     
     <div class="header-control">
         <p>十字カーソルでタップし候補地を配置 (最大10個)</p>
@@ -96,10 +85,10 @@ HTML
     
     <div class="note">
         <strong>【マップ上のラインについて】</strong><br>
-        抽象的な図形ではなく、<strong>「実際に視界を最も遮っている地形（ピーク）」に向かって線を引く</strong>仕様に変更しました。<br>
-        🔴 <strong>赤線：</strong> 仰角15度以上の重度な遮蔽物がある方向です。<br>
-        🟠 <strong>オレンジ線：</strong> 仰角5度〜15度の遮蔽物がある方向です。<br>
-        ※ 線が伸びている先の等高線が、実際に電波をブロックしている山の斜面です。
+        360度全方位の遮蔽状況を可視化しています。<br>
+        🔴 <strong>赤線：</strong> 仰角15度以上（通信が遮断されやすい危険な方向）<br>
+        🟠 <strong>オレンジ線：</strong> 仰角5度〜15度（やや障害物がある方向）<br>
+        🟢 <span style="color:#2ecc71; font-weight:bold;">緑の短い線：</span> 仰角5度未満（視界が開けており、GNSS電波を拾いやすい安全な方向）
     </div>
 </div>
 
@@ -119,8 +108,41 @@ HTML
         const stdMap = L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png', { attribution: "国土地理院", maxZoom: 18 });
         const satelliteMap = L.tileLayer('https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg', { attribution: "国土地理院", maxZoom: 18 });
 
-        map = L.map('map', { layers: [stdMap] }).setView([34.4820, 135.7118], 13);
+        // 指定のデフォルト座標（天王寺区勝山付近）
+        const defaultLat = 34.6533;
+        const defaultLon = 135.5265;
+        const defaultZoom = 15;
+
+        let initLat = defaultLat;
+        let initLon = defaultLon;
+        let initZoom = defaultZoom;
+
+        // 今日の日付を取得し、同じ日なら前回の位置を復元する
+        const today = new Date().toDateString();
+        const savedDate = localStorage.getItem('drtk_map_date');
+        
+        if (savedDate === today) {
+            const savedLat = localStorage.getItem('drtk_map_lat');
+            const savedLon = localStorage.getItem('drtk_map_lon');
+            const savedZoom = localStorage.getItem('drtk_map_zoom');
+            if (savedLat && savedLon && savedZoom) {
+                initLat = parseFloat(savedLat);
+                initLon = parseFloat(savedLon);
+                initZoom = parseInt(savedZoom, 10);
+            }
+        }
+
+        map = L.map('map', { layers: [stdMap] }).setView([initLat, initLon], initZoom);
         L.control.layers({ "標準地図": stdMap, "衛星写真": satelliteMap }).addTo(map);
+
+        // 地図を動かした際に状態を保存
+        map.on('moveend', function() {
+            const center = map.getCenter();
+            localStorage.setItem('drtk_map_date', new Date().toDateString());
+            localStorage.setItem('drtk_map_lat', center.lat);
+            localStorage.setItem('drtk_map_lon', center.lng);
+            localStorage.setItem('drtk_map_zoom', map.getZoom());
+        });
 
         map.on('click', async function(e) {
             if (candidatePoints.length >= maxMarkers) {
@@ -145,7 +167,7 @@ HTML
                 lon: e.latlng.lng,
                 elevation: '取得中...',
                 marker: marker,
-                drawnItems: L.layerGroup().addTo(map), // 描画ライン用グループ
+                drawnItems: L.layerGroup().addTo(map), 
                 color: colorHex,
                 bgColor: hexToRgba(colorHex, 0.2)
             };
@@ -238,7 +260,7 @@ HTML
         for (let p of candidatePoints) {
             p.drawnItems.clearLayers();
             let maxMaskAngles = new Array(16).fill(0);
-            let worstObstacleLatLngs = new Array(16).fill(null); // 最悪の障害物の位置を記憶
+            let worstObstacleLatLngs = new Array(16).fill(null);
             
             if (p.elevation === null) { completedRequests += angles.length * distances.length; continue; }
             const baseHeight = p.elevation + 1.8;
@@ -257,14 +279,14 @@ HTML
                             const angleDeg = Math.atan2(heightDiff, dist) * 180 / Math.PI;
                             if (angleDeg > maxMaskAngles[i]) {
                                 maxMaskAngles[i] = angleDeg;
-                                worstObstacleLatLngs[i] = [pt.lat, pt.lon]; // 最も角度がキツい場所を更新
+                                worstObstacleLatLngs[i] = [pt.lat, pt.lon];
                             }
                         }
                     }
                     await new Promise(r => setTimeout(r, 15));
                 }
                 
-                // 遮蔽角が5度以上の方向のみ、実際の障害物に向けて線を引く
+                // 遮蔽角に基づくライン描画
                 if (maxMaskAngles[i] >= 5 && worstObstacleLatLngs[i]) {
                     const isSevere = maxMaskAngles[i] >= 15;
                     L.polyline([[p.lat, p.lon], worstObstacleLatLngs[i]], {
@@ -274,9 +296,16 @@ HTML
                         dashArray: '5, 5'
                     }).addTo(p.drawnItems);
                     
-                    // 障害物の頂点に小さなマーカーを置く
                     L.circleMarker(worstObstacleLatLngs[i], {
                         radius: 4, color: isSevere ? '#e74c3c' : '#f39c12', fillOpacity: 1
+                    }).addTo(p.drawnItems);
+                } else {
+                    // 視界クリアな方向には短い緑色の線を描画 (100m先まで)
+                    const clearPt = getDestination(p.lat, p.lon, angles[i], 100);
+                    L.polyline([[p.lat, p.lon], [clearPt.lat, clearPt.lon]], {
+                        color: '#2ecc71',
+                        weight: 3,
+                        opacity: 0.7
                     }).addTo(p.drawnItems);
                 }
             }
@@ -289,7 +318,7 @@ HTML
             });
         }
 
-        statusText.innerText = "解析完了！等高線上の障害物ポイント(線とドット)をご確認ください。";
+        statusText.innerText = "解析完了！等高線上の障害物ポイントと緑の安全ラインをご確認ください。";
         btn.disabled = false; clearBtn.disabled = false;
         document.getElementById('progress-bar').style.display = 'none';
         drawChart(labels, chartDatasets);
@@ -307,9 +336,6 @@ HTML
         });
     }
 </script>
-
-</body>
-</html>
 
 </body>
 </html>
