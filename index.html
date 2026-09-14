@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="google" content="notranslate">
-    <title>D-RTK 3 上空視界チェッカー（SV最適化版） [Ver.6]</title>
+    <title>D-RTK 3 上空視界チェッカー（マップオーバーレイ対応版） [Ver.7]</title>
     <!-- 地図用 -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -26,7 +26,7 @@
         #clear-btn:disabled { background: #e0a09a; cursor: not-allowed; }
 
         /* マップのカーソルを十字型に変更 */
-        #map { height: 350px; width: 100%; border-radius: 4px; border: 1px solid #ccd1d1; margin-bottom: 15px; z-index: 1; cursor: crosshair; }
+        #map { height: 400px; width: 100%; border-radius: 4px; border: 1px solid #ccd1d1; margin-bottom: 15px; z-index: 1; cursor: crosshair; }
         
         .elevation-info { background: #e8f6f3; border-left: 4px solid #1abc9c; padding: 12px; margin-bottom: 15px; border-radius: 4px; display: none; }
         .marker-item { margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px dashed #bdc3c7; }
@@ -52,13 +52,14 @@
         .progress-fill { height: 10px; background-color: #1abc9c; width: 0%; transition: width 0.2s; }
         
         #chart-container { position: relative; height: 400px; width: 100%; margin-top: 20px; display: none; }
-        .note { font-size: 0.8rem; color: #7f8c8d; margin-top: 10px; line-height: 1.4; text-align: center; }
+        .note { font-size: 0.85rem; color: #34495e; margin-top: 20px; line-height: 1.5; text-align: left; background: #fdfefe; padding: 15px; border: 1px solid #d5d8dc; border-radius: 4px; }
+        .note strong { color: #e74c3c; }
     </style>
 </head>
 <body class="notranslate">
 
 <div class="container">
-    <h1>D-RTK 3 上空視界シミュレーター<br><span style="color: #e74c3c;">[Ver.6] SV最適化版</span></h1>
+    <h1>D-RTK 3 上空視界シミュレーター<br><span style="color: #e74c3c;">[Ver.7] マップ重畳表示・SV注意書き追加版</span></h1>
     
     <div class="header-control">
         <p>十字カーソルでタップし候補地を配置 (最大10個)</p>
@@ -74,7 +75,7 @@
     <div id="map"></div>
 
     <div id="marker-list-container" class="elevation-info">
-        <!-- 候補地のリストがここに入ります -->
+        <!-- 候補地のリスト -->
     </div>
 
     <button id="analyze-btn" class="btn" onclick="startAnalysis()" disabled>配置した候補地の解析を開始する</button>
@@ -91,8 +92,10 @@
     </div>
     
     <div class="note">
-        ※ 山間部などストリートビューデータが存在しない地点の場合、Googleマップが開くだけになることがあります。<br>
-        ※ チャートの面積が広いほど、地形や障害物に隠れて通信(FIX)しにくい場所を示します。
+        <strong>【ストリートビュー利用時のご注意】</strong><br>
+        「現況をストリートビューで確認」をタップした際、<strong>画面が真っ黒になって何も表示されない場合は、画面内（主に右上など）にある「✖」マークをタップして閉じてください。</strong>背後に実際の風景画像が隠れていることがあります。<br><br>
+        <strong>【マップ上の図形（ポリゴン）について】</strong><br>
+        解析が完了すると、地図上の各ピンの周囲に色付きの図形が描画されます。これは<strong>図形が外側に大きく広がっている方向ほど、遮蔽角（見上げ角）が大きい＝山や建物に視界を塞がれている</strong>ことを表しています。等高線や衛星写真と重ねて視界の抜け具合を確認できます。
     </div>
 </div>
 
@@ -150,6 +153,7 @@
                 lon: e.latlng.lng,
                 elevation: '取得中...',
                 marker: marker,
+                polygon: null, // 地図描画用の図形データ
                 color: colorHex,
                 bgColor: hexToRgba(colorHex, 0.2)
             };
@@ -178,9 +182,6 @@
         candidatePoints.forEach(p => {
             let eleStr = (p.elevation === null) ? 'データなし' : (typeof p.elevation === 'number' ? p.elevation.toFixed(2) + ' m' : p.elevation);
             let coordStr = `${p.lat.toFixed(6)}, ${p.lon.toFixed(6)}`;
-            
-            // 【変更点】ストリートビューのURL形式を変更
-            // 以前の形式はスマホで黒いカバーが出やすいため、より直接的なcbllパラメータを使用します
             let svUrl = `https://www.google.com/maps?q=${p.lat},${p.lon}&layer=c&cbll=${p.lat},${p.lon}`;
             
             html += `<div class="marker-item">
@@ -200,7 +201,10 @@
     }
 
     function clearMarkers() {
-        candidatePoints.forEach(p => map.removeLayer(p.marker));
+        candidatePoints.forEach(p => {
+            map.removeLayer(p.marker);
+            if (p.polygon) map.removeLayer(p.polygon); // 描画した図形も消去
+        });
         candidatePoints = [];
         updateMarkerList();
         document.getElementById('analyze-btn').disabled = true;
@@ -249,10 +253,21 @@
         progressBar.style.display = 'block';
         document.getElementById('chart-container').style.display = 'none';
         
+        // 以前の図形を一度クリア
+        candidatePoints.forEach(p => {
+            if (p.polygon) {
+                map.removeLayer(p.polygon);
+                p.polygon = null;
+            }
+        });
+        
         const angles = [0, 22.5, 45, 67.5, 90, 112.5, 135, 157.5, 180, 202.5, 225, 247.5, 270, 292.5, 315, 337.5];
         const labels = ['北', '北北東', '北東', '東北東', '東', '東南東', '南東', '南南東', '南', '南南西', '南西', '西南西', '西', '西北西', '北西', '北北西'];
         const distances = [100, 300, 500, 1000, 1500, 2000];
         const dRtkHeightOffset = 1.8;
+        
+        // 遮蔽角を地図上の距離（m）に変換するスケール係数（1度＝15mで描画）
+        const mapScalePerDegree = 15; 
         
         let totalRequests = candidatePoints.length * angles.length * distances.length;
         let completedRequests = 0;
@@ -261,6 +276,7 @@
         for (let pIndex = 0; pIndex < candidatePoints.length; pIndex++) {
             let p = candidatePoints[pIndex];
             let maxMaskAngles = new Array(16).fill(0);
+            let polygonLatLngs = []; // マップ描画用の座標配列
             
             if (p.elevation === null || typeof p.elevation !== 'number') {
                 completedRequests += angles.length * distances.length;
@@ -294,7 +310,21 @@
                     }
                     await new Promise(resolve => setTimeout(resolve, 15));
                 }
+                
+                // 各方向の遮蔽角から、マップに描画するポリゴンの頂点を計算
+                let drawRadius = maxMaskAngles[i] * mapScalePerDegree;
+                if (drawRadius < 10) drawRadius = 10; // 遮蔽0でも点が見えるように最低10mは確保
+                let polyPt = getDestination(p.lat, p.lon, angles[i], drawRadius);
+                polygonLatLngs.push([polyPt.lat, polyPt.lon]);
             }
+            
+            // 地図上に図形（ポリゴン）を追加
+            p.polygon = L.polygon(polygonLatLngs, {
+                color: p.color,
+                fillColor: p.color,
+                fillOpacity: 0.4,
+                weight: 2
+            }).addTo(map);
             
             chartDatasets.push({
                 label: `地点 ${p.id}`,
@@ -309,7 +339,7 @@
             });
         }
 
-        statusText.innerText = "全候補地の解析が完了しました！";
+        statusText.innerText = "全候補地の解析が完了しました！マップ上の図形もご確認ください。";
         btn.disabled = false;
         clearBtn.disabled = false;
         progressBar.style.display = 'none';
